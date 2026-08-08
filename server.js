@@ -338,6 +338,157 @@ app.patch('/api/quizzes/:id/publish', verifyToken, requireAdmin, async (req, res
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
+// Create a category (Admin only)
+app.post('/api/categories', verifyToken, requireAdmin, async (req, res) => {
+  const { name, description } = req.body;
+  if (!name) {
+    return res.status(400).json({ success: false, error: 'Category name is required' });
+  }
+  try {
+    const result = await pool.query(
+      'INSERT INTO categories (name, description) VALUES ($1, $2) RETURNING *',
+      [name, description]
+    );
+    res.status(201).json({ success: true, category: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Get all categories (anyone logged in)
+app.get('/api/categories', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM categories ORDER BY name');
+    res.json({ success: true, categories: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Edit a category (Admin only)
+app.put('/api/categories/:id', verifyToken, requireAdmin, async (req, res) => {
+  const { name, description } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE categories SET name = $1, description = $2 WHERE id = $3 RETURNING *',
+      [name, description, req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Category not found' });
+    }
+    res.json({ success: true, category: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Delete a category (Admin only)
+app.delete('/api/categories/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM categories WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Category not found' });
+    }
+    res.json({ success: true, message: 'Category deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+// Add a question with options to a quiz (Admin only)
+app.post('/api/quizzes/:quizId/questions', verifyToken, requireAdmin, async (req, res) => {
+  const { question_text, marks, explanation, difficulty, options } = req.body;
+  // options should be an array like: [{ option_text: "...", is_correct: true }, ...]
+
+  if (!question_text || !options || options.length < 2) {
+    return res.status(400).json({ success: false, error: 'Question text and at least 2 options are required' });
+  }
+
+  const hasCorrectAnswer = options.some(opt => opt.is_correct === true);
+  if (!hasCorrectAnswer) {
+    return res.status(400).json({ success: false, error: 'At least one option must be marked correct' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const questionResult = await client.query(
+      'INSERT INTO questions (quiz_id, question_text, marks, explanation, difficulty) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [req.params.quizId, question_text, marks || 1, explanation, difficulty]
+    );
+    const question = questionResult.rows[0];
+
+    const insertedOptions = [];
+    for (const opt of options) {
+      const optResult = await client.query(
+        'INSERT INTO options (question_id, option_text, is_correct) VALUES ($1, $2, $3) RETURNING *',
+        [question.id, opt.option_text, opt.is_correct || false]
+      );
+      insertedOptions.push(optResult.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, question: { ...question, options: insertedOptions } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Get all questions for a quiz (Admin only — includes correct answers)
+app.get('/api/quizzes/:quizId/questions', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const questions = await pool.query('SELECT * FROM questions WHERE quiz_id = $1', [req.params.quizId]);
+    const questionsWithOptions = [];
+    for (const q of questions.rows) {
+      const options = await pool.query('SELECT * FROM options WHERE question_id = $1', [q.id]);
+      questionsWithOptions.push({ ...q, options: options.rows });
+    }
+    res.json({ success: true, questions: questionsWithOptions });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Edit a question (Admin only)
+app.put('/api/questions/:id', verifyToken, requireAdmin, async (req, res) => {
+  const { question_text, marks, explanation, difficulty } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE questions SET question_text=$1, marks=$2, explanation=$3, difficulty=$4 WHERE id=$5 RETURNING *',
+      [question_text, marks, explanation, difficulty, req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Question not found' });
+    }
+    res.json({ success: true, question: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Delete a question (Admin only) — options auto-delete via ON DELETE CASCADE
+app.delete('/api/questions/:id', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM questions WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Question not found' });
+    }
+    res.json({ success: true, message: 'Question deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
