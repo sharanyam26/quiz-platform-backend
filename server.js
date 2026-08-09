@@ -488,6 +488,67 @@ app.delete('/api/questions/:id', verifyToken, requireAdmin, async (req, res) => 
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+});// Start a quiz attempt (Student)
+app.post('/api/quizzes/:quizId/start', verifyToken, async (req, res) => {
+  try {
+    const quizResult = await pool.query('SELECT * FROM quizzes WHERE id = $1', [req.params.quizId]);
+    if (quizResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Quiz not found' });
+    }
+    const quiz = quizResult.rows[0];
+
+    if (quiz.status !== 'PUBLISHED') {
+      return res.status(403).json({ success: false, error: 'This quiz is not available' });
+    }
+
+    // Check how many times this student has already attempted it
+    const attemptCount = await pool.query(
+      'SELECT COUNT(*) FROM attempts WHERE quiz_id = $1 AND user_id = $2',
+      [req.params.quizId, req.user.id]
+    );
+    if (parseInt(attemptCount.rows[0].count) >= quiz.max_attempts) {
+      return res.status(403).json({ success: false, error: 'Maximum attempts reached for this quiz' });
+    }
+
+    // Create the attempt, recording the real server start time
+    const attemptResult = await pool.query(
+      `INSERT INTO attempts (quiz_id, user_id, status, started_at) 
+       VALUES ($1, $2, 'IN_PROGRESS', NOW()) RETURNING *`,
+      [req.params.quizId, req.user.id]
+    );
+
+    res.status(201).json({
+      success: true,
+      attempt: attemptResult.rows[0],
+      quiz: { id: quiz.id, title: quiz.title, duration: quiz.duration, passing_score: quiz.passing_score },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Get quiz questions for a student to answer (correct answers hidden)
+app.get('/api/quizzes/:quizId/take', verifyToken, async (req, res) => {
+  try {
+    const questions = await pool.query(
+      'SELECT id, question_text, marks FROM questions WHERE quiz_id = $1',
+      [req.params.quizId]
+    );
+    const questionsWithOptions = [];
+    for (const q of questions.rows) {
+      // Note: is_correct is deliberately excluded from this query
+      const options = await pool.query(
+        'SELECT id, option_text FROM options WHERE question_id = $1',
+        [q.id]
+      );
+      questionsWithOptions.push({ ...q, options: options.rows });
+    }
+    res.json({ success: true, questions: questionsWithOptions });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
