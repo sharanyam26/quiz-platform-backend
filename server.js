@@ -762,6 +762,79 @@ app.get('/api/student/dashboard', verifyToken, async (req, res) => {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+});// Admin analytics (Admin only)
+app.get('/api/admin/analytics', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    // Quiz attempts over time (last 30 days, grouped by date)
+    const attemptsOverTime = await pool.query(
+      `SELECT DATE(started_at) AS date, COUNT(*) AS count
+       FROM attempts
+       WHERE started_at >= NOW() - INTERVAL '30 days'
+       GROUP BY DATE(started_at)
+       ORDER BY date`
+    );
+
+    // Student registrations over time (last 30 days)
+    const registrationsOverTime = await pool.query(
+      `SELECT DATE(created_at) AS date, COUNT(*) AS count
+       FROM users
+       WHERE role = 'STUDENT' AND created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY DATE(created_at)
+       ORDER BY date`
+    );
+
+    // Pass/fail ratio overall
+    const passFailRatio = await pool.query(
+      `SELECT status, COUNT(*) AS count
+       FROM attempts
+       WHERE status IN ('PASSED', 'FAILED')
+       GROUP BY status`
+    );
+
+    // Most popular quizzes (by attempt count)
+    const popularQuizzes = await pool.query(
+      `SELECT q.id, q.title, COUNT(a.id) AS attempt_count
+       FROM quizzes q
+       LEFT JOIN attempts a ON a.quiz_id = q.id
+       GROUP BY q.id, q.title
+       ORDER BY attempt_count DESC
+       LIMIT 5`
+    );
+
+    // Most popular categories (by quiz attempt count)
+    const popularCategories = await pool.query(
+      `SELECT c.id, c.name, COUNT(a.id) AS attempt_count
+       FROM categories c
+       LEFT JOIN quizzes q ON q.category_id = c.id
+       LEFT JOIN attempts a ON a.quiz_id = q.id
+       GROUP BY c.id, c.name
+       ORDER BY attempt_count DESC
+       LIMIT 5`
+    );
+
+    // Average score per quiz
+    const avgScorePerQuiz = await pool.query(
+      `SELECT q.id, q.title, AVG(a.percentage) AS average_score
+       FROM quizzes q
+       LEFT JOIN attempts a ON a.quiz_id = q.id AND a.status IN ('PASSED', 'FAILED')
+       GROUP BY q.id, q.title`
+    );
+
+    res.json({
+      success: true,
+      analytics: {
+        attemptsOverTime: attemptsOverTime.rows,
+        registrationsOverTime: registrationsOverTime.rows,
+        passFailRatio: passFailRatio.rows,
+        popularQuizzes: popularQuizzes.rows,
+        popularCategories: popularCategories.rows,
+        avgScorePerQuiz: avgScorePerQuiz.rows,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
