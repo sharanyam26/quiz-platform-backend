@@ -5,7 +5,26 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 
-const app = express();
+const app = express();const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+// Secure HTTP headers (hides tech stack info, prevents common attacks)
+app.use(helmet());
+
+// Rate limiting: max 100 requests per 15 minutes per IP (prevents brute-force/abuse)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { success: false, error: 'Too many requests, please try again later' },
+});
+app.use(limiter);
+
+// Stricter limit specifically on login (prevents password brute-forcing)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, error: 'Too many login attempts, please try again later' },
+});
 app.use(cors());
 app.use(express.json());
 
@@ -85,7 +104,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // Login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
