@@ -549,6 +549,106 @@ app.get('/api/quizzes/:quizId/take', verifyToken, async (req, res) => {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+});// Submit a quiz attempt (Student)
+app.post('/api/quizzes/:quizId/submit', verifyToken, async (req, res) => {
+  const { attempt_id, answers } = req.body;
+  // answers should be an array like: [{ question_id: 1, selected_option_id: 2 }, ...]
+
+  if (!attempt_id || !answers) {
+    return res.status(400).json({ success: false, error: 'attempt_id and answers are required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Verify the attempt belongs to this student and is still in progress
+    const attemptResult = await client.query(
+      'SELECT * FROM attempts WHERE id = $1 AND user_id = $2',
+      [attempt_id, req.user.id]
+    );
+    if (attemptResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Attempt not found' });
+    }
+    const attempt = attemptResult.rows[0];
+    if (attempt.status !== 'IN_PROGRESS') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, error: 'This attempt has already been submitted' });
+    }
+
+    // Get all questions for this quiz, with correct answers (server-side only)
+    const questionsResult = await client.query(
+      'SELECT id, marks FROM questions WHERE quiz_id = $1',
+      [req.params.quizId]
+    );
+    const totalQuestions = questionsResult.rows.length;
+
+    let correctCount = 0;
+    let incorrectCount = 0;
+    let totalMarks = 0;
+    let obtainedMarks = 0;
+
+    for (const question of questionsResult.rows) {
+      totalMarks += question.marks;
+
+      const submittedAnswer = answers.find(a => a.question_id === question.id);
+
+      let selectedOptionId = null;
+      let isCorrect = false;
+
+      if (submittedAnswer) {
+        selectedOptionId = submittedAnswer.selected_option_id;
+
+        // Check against the REAL correct answer in the database
+        const correctOption = await client.query(
+          'SELECT id FROM options WHERE question_id = $1 AND is_correct = true',
+          [question.id]
+        );
+        isCorrect = correctOption.rows.length > 0 && correctOption.rows[0].id === selectedOptionId;
+
+        if (isCorrect) {
+          correctCount++;
+          obtainedMarks += question.marks;
+        } else {
+          incorrectCount++;
+        }
+      }
+
+      // Save this answer record
+      await client.query(
+        'INSERT INTO answers (attempt_id, question_id, selected_option_id, is_correct) VALUES ($1, $2, $3, $4)',
+        [attempt_id, question.id, selectedOptionId, isCorrect]
+      );
+    }
+
+    const unansweredCount = totalQuestions - (correctCount + incorrectCount);
+    const percentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
+
+    // Get passing score from the quiz
+    const quizResult = await client.query('SELECT passing_score FROM quizzes WHERE id = $1', [req.params.quizId]);
+    const passingScore = quizResult.rows[0].passing_score;
+    const status = parseFloat(percentage) >= passingScore ? 'PASSED' : 'FAILED';
+
+    const timeTaken = Math.floor((new Date() - new Date(attempt.started_at)) / 1000); // seconds
+
+    const updatedAttempt = await client.query(
+      `UPDATE attempts SET 
+        score = $1, percentage = $2, correct_answers = $3, incorrect_answers = $4, 
+        unanswered = $5, status = $6, time_taken = $7, completed_at = NOW()
+       WHERE id = $8 RETURNING *`,
+      [obtainedMarks, percentage, correctCount, incorrectCount, unansweredCount, status, timeTaken, attempt_id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, result: updatedAttempt.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  } finally {
+    client.release();
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
