@@ -835,6 +835,73 @@ app.get('/api/admin/analytics', verifyToken, requireAdmin, async (req, res) => {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+});// Overall leaderboard (any logged-in user can view)
+app.get('/api/leaderboard', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+         u.id AS user_id, 
+         u.name, 
+         AVG(a.percentage) AS average_score,
+         COUNT(a.id) AS quizzes_completed,
+         MAX(a.percentage) AS highest_score
+       FROM users u
+       JOIN attempts a ON a.user_id = u.id
+       WHERE u.role = 'STUDENT' AND a.status IN ('PASSED', 'FAILED')
+       GROUP BY u.id, u.name
+       ORDER BY average_score DESC
+       LIMIT 20`
+    );
+
+    // Add a rank number to each row
+    const ranked = result.rows.map((row, index) => ({
+      rank: index + 1,
+      user_id: row.user_id,
+      name: row.name,
+      average_score: parseFloat(row.average_score).toFixed(2),
+      quizzes_completed: parseInt(row.quizzes_completed),
+      highest_score: parseFloat(row.highest_score).toFixed(2),
+    }));
+
+    res.json({ success: true, leaderboard: ranked });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Category-wise leaderboard
+app.get('/api/leaderboard/category/:categoryId', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+         u.id AS user_id, 
+         u.name, 
+         AVG(a.percentage) AS average_score,
+         COUNT(a.id) AS quizzes_completed
+       FROM users u
+       JOIN attempts a ON a.user_id = u.id
+       JOIN quizzes q ON a.quiz_id = q.id
+       WHERE u.role = 'STUDENT' AND q.category_id = $1 AND a.status IN ('PASSED', 'FAILED')
+       GROUP BY u.id, u.name
+       ORDER BY average_score DESC
+       LIMIT 20`,
+      [req.params.categoryId]
+    );
+
+    const ranked = result.rows.map((row, index) => ({
+      rank: index + 1,
+      user_id: row.user_id,
+      name: row.name,
+      average_score: parseFloat(row.average_score).toFixed(2),
+      quizzes_completed: parseInt(row.quizzes_completed),
+    }));
+
+    res.json({ success: true, leaderboard: ranked });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
