@@ -649,6 +649,64 @@ app.post('/api/quizzes/:quizId/submit', verifyToken, async (req, res) => {
   } finally {
     client.release();
   }
+});// Get detailed result for a specific attempt (Student can view their own; Admin can view any)
+app.get('/api/attempts/:id', verifyToken, async (req, res) => {
+  try {
+    const attemptResult = await pool.query('SELECT * FROM attempts WHERE id = $1', [req.params.id]);
+    if (attemptResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Attempt not found' });
+    }
+    const attempt = attemptResult.rows[0];
+
+    // Students can only view their own attempts
+    if (req.user.role !== 'ADMIN' && attempt.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Access denied' });
+    }
+
+    const quizResult = await pool.query('SELECT title FROM quizzes WHERE id = $1', [attempt.quiz_id]);
+
+    // Get full answer review: question, what they picked, the correct answer, explanation
+    const answersResult = await pool.query(
+      `SELECT 
+        a.question_id, a.selected_option_id, a.is_correct,
+        q.question_text, q.explanation,
+        o_selected.option_text AS selected_option_text,
+        o_correct.option_text AS correct_option_text
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       LEFT JOIN options o_selected ON a.selected_option_id = o_selected.id
+       JOIN options o_correct ON o_correct.question_id = q.id AND o_correct.is_correct = true
+       WHERE a.attempt_id = $1`,
+      [req.params.id]
+    );
+
+    res.json({
+      success: true,
+      attempt: { ...attempt, quiz_title: quizResult.rows[0]?.title },
+      answers: answersResult.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Get all attempts for the logged-in student (their history)
+app.get('/api/attempts', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT a.*, q.title AS quiz_title 
+       FROM attempts a 
+       JOIN quizzes q ON a.quiz_id = q.id 
+       WHERE a.user_id = $1 
+       ORDER BY a.started_at DESC`,
+      [req.user.id]
+    );
+    res.json({ success: true, attempts: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
