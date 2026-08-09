@@ -36,3 +36,15 @@ cd backend
 npm install
 # Create a .env file with PORT, DATABASE_URL, JWT_SECRET
 npm run dev
+```
+
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Status
+✅ Backend complete (14-day build plan) — auth, roles, quizzes, questions, scoring, analytics, leaderboard, deployed live.
+🚧 Frontend (React UI) — in progress.
