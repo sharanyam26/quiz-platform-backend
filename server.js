@@ -707,6 +707,61 @@ app.get('/api/attempts', verifyToken, async (req, res) => {
     console.error(err);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+});// Student dashboard stats (for the logged-in student)
+app.get('/api/student/dashboard', verifyToken, async (req, res) => {
+  try {
+    const totalAttempted = await pool.query(
+      'SELECT COUNT(*) FROM attempts WHERE user_id = $1 AND status != $2',
+      [req.user.id, 'IN_PROGRESS']
+    );
+    const totalPassed = await pool.query(
+      "SELECT COUNT(*) FROM attempts WHERE user_id = $1 AND status = 'PASSED'",
+      [req.user.id]
+    );
+    const totalFailed = await pool.query(
+      "SELECT COUNT(*) FROM attempts WHERE user_id = $1 AND status = 'FAILED'",
+      [req.user.id]
+    );
+    const avgScore = await pool.query(
+      "SELECT AVG(percentage) FROM attempts WHERE user_id = $1 AND status != 'IN_PROGRESS'",
+      [req.user.id]
+    );
+    const highestScore = await pool.query(
+      "SELECT MAX(percentage) FROM attempts WHERE user_id = $1 AND status != 'IN_PROGRESS'",
+      [req.user.id]
+    );
+    const totalQuestionsAnswered = await pool.query(
+      `SELECT COUNT(*) FROM answers a 
+       JOIN attempts at ON a.attempt_id = at.id 
+       WHERE at.user_id = $1`,
+      [req.user.id]
+    );
+    const recentAttempts = await pool.query(
+      `SELECT a.id, a.percentage, a.status, a.completed_at, q.title AS quiz_title
+       FROM attempts a
+       JOIN quizzes q ON a.quiz_id = q.id
+       WHERE a.user_id = $1 AND a.status != 'IN_PROGRESS'
+       ORDER BY a.completed_at DESC
+       LIMIT 5`,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      stats: {
+        totalAttempted: parseInt(totalAttempted.rows[0].count),
+        totalPassed: parseInt(totalPassed.rows[0].count),
+        totalFailed: parseInt(totalFailed.rows[0].count),
+        averageScore: parseFloat(avgScore.rows[0].avg) || 0,
+        highestScore: parseFloat(highestScore.rows[0].max) || 0,
+        totalQuestionsAnswered: parseInt(totalQuestionsAnswered.rows[0].count),
+      },
+      recentAttempts: recentAttempts.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
